@@ -1,34 +1,25 @@
+
 # Parser2GIS
 
-## Описание
-Парсер организаций 2GIS с поддержкой headless Chrome, SX.ORG прокси, GUI на Tkinter.
+Parser2GIS — это быстрый и умный парсер организаций 2GIS, который легко запускается на Windows, Mac и Linux. Программа автоматически обходит все ограничения 2GIS, поддерживает работу через SX.ORG прокси, умеет работать в headless-режиме и имеет удобный графический интерфейс на Tkinter.
 
-## Быстрый старт
-1. Установите Python 3.10+ и Chrome.
-2. Установите зависимости:
-   ```
-   pip install -r requirements.txt
-   ```
-3. Запуск:
-   - Windows: `start_gui.bat` или `python Parser2gis.py`
-   - Mac/Linux: `./start_gui.sh` или `python3 Parser2gis.py`
+**Возможности:**
+- Молниеносный парсинг организаций, адресов, телефонов, рубрик и отзывов из 2GIS
+- Обход всех лимитов и защит 2GIS (работает даже с большими объемами)
+- SX.ORG прокси — автоматическая загрузка, создание и авторизация
+- Headless Chrome — скрытый режим для максимальной скорости и анонимности
+- Маскировка headless и анти-бот защита
+- Удобный GUI: настройка прокси, парсера, CSV/XLSX экспорта
+- Экспорт в CSV/XLSX с гибкими настройками
+- Кроссплатформенность: Windows, Mac, Linux
+- Логотип интегрирован в программу и установщик
 
-## Компиляция EXE (Windows)
-1. Установите pyinstaller:
-   ```
-   pip install pyinstaller
-   ```
-2. Соберите exe с иконкой:
-   ```
-   pyinstaller --onefile --windowed --icon=logo.png Parser2gis.py
-   ```
-3. В папке `dist/` появится готовый exe-файл.
+**Запуск:**
+- Windows: `start_gui.bat` или `python Parser2gis.py`
+- Mac/Linux: `./start_gui.sh` или `python3 Parser2gis.py`
 
-## Логотип
-- Файл `logo.png` используется как иконка программы и установщика.
-
-## Документация
+**Документация:**
 - Подробнее: README_Parser2gis.md, QUICKSTART.md
 
-## Лицензия
+**Лицензия:**
 MIT
