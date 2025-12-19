@@ -2,5 +2,4 @@ pychrome
 requests
 pydantic
 urllib3
-tkinter
 psutil
