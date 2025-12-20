@@ -35,3 +35,32 @@ jobs:
           files: dist/Parser2gis.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Build macOS binary
+        run: pyinstaller --onefile --windowed Parser2gis.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Parser2gis-mac
+          path: dist/Parser2gis
+
+      - name: Create Release (macOS)
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Parser2gis
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
