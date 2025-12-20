@@ -49,18 +49,32 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt pyinstaller
 
-      - name: Build macOS binary
-        run: pyinstaller --onefile --windowed Parser2gis.py
+      - name: Build macOS .app
+        run: pyinstaller --windowed --icon=logo.icns Parser2gis.py
 
-      - name: Upload artifact
+      - name: Archive .app for release
+        run: |
+          cd dist
+          ditto -c -k --sequesterRsrc --keepParent Parser2gis.app ../Parser2gis-mac.zip
+
+      - name: Create DMG installer
+        run: |
+          brew install create-dmg || true
+          create-dmg --volname "Parser2gis" --window-pos 200 120 --window-size 600 400 \
+            --icon-size 100 --icon Parser2gis.app 200 190 --hide-extension Parser2gis.app \
+            --app-drop-link 400 190 "../Parser2gis-mac.dmg" "dist/Parser2gis.app"
+
+      - name: Upload artifact (DMG)
         uses: actions/upload-artifact@v4
         with:
-          name: Parser2gis-mac
-          path: dist/Parser2gis
+          name: Parser2gis-mac.dmg
+          path: Parser2gis-mac.dmg
 
       - name: Create Release (macOS)
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/Parser2gis
+          files: |
+            Parser2gis-mac.zip
+            Parser2gis-mac.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
