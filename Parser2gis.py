@@ -1448,7 +1448,7 @@ class Parser2GIS:
                 // Телефоны - пробуем раскрыть кнопку, потом извлекаем
                 const phoneElements = document.querySelectorAll('div._b0ke8 a[href^="tel:"]');
                 result.phones = Array.from(phoneElements)
-                    .map(el => el.innerText.trim())
+                    .map(el => el.href.replace('tel:', ''))
                     .filter(text => text);
                 
                 // Email (из Solrikk)
@@ -1540,7 +1540,7 @@ class Parser2GIS:
                         (function() {
                             const phoneElements = document.querySelectorAll('div._b0ke8 a[href^="tel:"]');
                             return JSON.stringify(Array.from(phoneElements)
-                                .map(el => el.innerText.trim())
+                                .map(el => el.href.replace('tel:', ''))
                                 .filter(text => text));
                         })();
                         """
