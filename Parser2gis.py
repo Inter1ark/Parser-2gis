@@ -1247,12 +1247,12 @@ def gui_settings(config: Configuration) -> None:
 def gui_urls_editor(urls: List[str]) -> List[str] | None:
     window = tk.Toplevel()
     window.title("URLs")
-    window.geometry("600x400")
-    window.resizable(False, False)
+    window.geometry("650x500")
+    window.resizable(True, True)
     tk.Label(window, text="Ссылки").pack(pady=6)
-    url_text = ScrolledText(window, height=20, width=70)
+    url_text = ScrolledText(window, height=18, width=70)
     url_text.insert(tk.END, '\n'.join(urls))
-    url_text.pack(padx=6, pady=6)
+    url_text.pack(padx=10, pady=6, fill=tk.BOTH, expand=False)
     result = [None]
     def on_ok():
         result[0] = [x.strip() for x in url_text.get("1.0", tk.END).splitlines() if x.strip()]
