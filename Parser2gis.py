@@ -39,7 +39,8 @@ from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 
 # Версия программы
-VERSION = "1.2.1"
+VERSION = "1.3.0"
+GITHUB_REPO = "Inter1ark/Parser-2gis"
 
 # Проверка платформы
 running_linux = lambda: sys.platform.startswith('linux')
@@ -74,68 +75,45 @@ except AttributeError:
     pass
 
 # ----------------- SX.ORG helpers -----------------
-def load_sxorg_proxies(api_key: str, country: Optional[str] = None, city: Optional[str] = None, state: Optional[str] = None) -> List[Dict[str, str]]:
-    proxies = []
-    url = "https://api.sx.org/v2/proxy/ports"
-    params = {"apiKey": api_key, "per_page": 100}
-    if country:
-        params["countryName"] = country
-    if city:
-        params["cityName"] = city
-    if state:
-        params["stateName"] = state
 
-    session = requests.Session()
-    retries = Retry(total=5, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
-    session.mount("https://", HTTPAdapter(max_retries=retries))
+# ----------------- Auto-update via GitHub tags -----------------
+def check_for_updates() -> dict | None:
+    """Проверяет наличие новой версии на GitHub.
+    Возвращает {'version': '1.4.0', 'url': '...', 'notes': '...'} или None.
+    """
     try:
-        logger.info("Запрос SX.ORG %s %s", url, params)
-        resp = session.get(url, params=params, timeout=10)
-        resp.raise_for_status()
+        resp = requests.get(
+            f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+            timeout=8,
+            headers={"Accept": "application/vnd.github.v3+json"}
+        )
+        if resp.status_code != 200:
+            return None
         data = resp.json()
-        if not data.get('success', False):
-            logger.error("SX.ORG API returned error: %s", data.get('message'))
-            return []
-        proxies_src = []
-        if 'message' in data and isinstance(data['message'], dict):
-            proxies_src = data['message'].get('proxies', [])
-        elif 'proxies' in data:
-            proxies_src = data.get('proxies', [])
-        for proxy in proxies_src:
-            proxy_str = proxy.get('proxy') or proxy.get('server') or ''
-            if ':' in proxy_str:
-                host, port = proxy_str.split(':', 1)
-            else:
-                host = proxy_str
-                port = str(proxy.get('port', ''))
-            proxies.append({
-                'host': host,
-                'port': port,
-                'username': proxy.get('login') or proxy.get('username') or '',
-                'password': proxy.get('password') or '',
-                'country': proxy.get('countryCode') or proxy.get('country', ''),
-                'city': proxy.get('cityName') or proxy.get('city', ''),
-                'state': proxy.get('stateName') or proxy.get('state', ''),
-                'type': 'Residential' if proxy.get('proxy_type_id') == 1 else 'Mobile' if proxy.get('proxy_type_id') == 3 else 'Corporate' if proxy.get('proxy_type_id') == 4 else 'Unknown',
-                'name': proxy.get('name', ''),
-                'traffic_used': proxy.get('spent_traffic_current_month', 0),
-                'traffic_limit': proxy.get('traffic_limit', 0)
-            })
-        logger.info("Загружено %d прокси", len(proxies))
-        return proxies
-    except requests.exceptions.RequestException as e:
-        logger.error("Ошибка SX.ORG: %s", e)
-        return []
-    finally:
-        session.close()
+        tag = data.get("tag_name", "").lstrip("vV")
+        if not tag:
+            return None
+        # Сравниваем версии (tuple сравнение)
+        def ver_tuple(v):
+            return tuple(int(x) for x in v.split('.') if x.isdigit())
+        if ver_tuple(tag) > ver_tuple(VERSION):
+            return {
+                'version': tag,
+                'url': data.get('html_url', f'https://github.com/{GITHUB_REPO}/releases/latest'),
+                'notes': data.get('body', '')[:300],
+            }
+    except Exception as e:
+        logger.debug("Ошибка проверки обновлений: %s", e)
+    return None
+
 
 def get_sxorg_balance(api_key: str) -> str:
-    url = "https://api.sx.org/v2/user/balance"
-    params = {"apiKey": api_key}
+    """Получить баланс пользователя SX.ORG."""
     session = requests.Session()
     session.mount("https://", HTTPAdapter(max_retries=Retry(total=3)))
     try:
-        resp = session.get(url, params=params, timeout=10)
+        resp = session.get("https://api.sx.org/v2/user/balance",
+                          params={"apiKey": api_key}, timeout=10)
         resp.raise_for_status()
         data = resp.json()
         if data.get('success'):
@@ -147,50 +125,45 @@ def get_sxorg_balance(api_key: str) -> str:
     finally:
         session.close()
 
-def create_sxorg_proxy(api_key: str, country_code: str, proxy_type_id: str, connection_type_id: str, name: Optional[str] = None, traffic_limit: Optional[int] = None, state: Optional[str] = None, city: Optional[str] = None, asn: Optional[int] = None) -> Dict[str, Any]:
-    url = "https://api.sx.org/v2/proxy/create-port"
-    params = {"apiKey": api_key}
-    payload = {
-        "country_code": country_code,
-        "proxy_type_id": proxy_type_id,
-        "server_port_type_id": "1",
-        "type_id": connection_type_id
-    }
-    if name:
-        payload["name"] = name
-    if traffic_limit:
-        payload["traffic_limit"] = traffic_limit
-    if state:
-        payload["state"] = state
-    if city:
-        payload["city"] = city
-    if asn:
-        payload["asn"] = asn
 
+def create_sxorg_proxy(api_key: str) -> Dict[str, Any]:
+    """Создать мобильную SHARED прокси через SX.ORG API.
+    Возвращает dict с ключами: proxy_string, refresh_link, host, port, login, password.
+    """
     session = requests.Session()
     session.mount("https://", HTTPAdapter(max_retries=Retry(total=3)))
     try:
-        resp = session.post(url, params=params, json=payload, timeout=10)
+        resp = session.post(
+            "https://api.sx.org/v2/proxy/create-port",
+            params={"apiKey": api_key},
+            json={
+                "country_code": "RU",
+                "type_id": 3,           # mobile
+                "proxy_type_id": 3,     # mobile
+                "name": "Parser2GIS",
+                "server_port_type_id": 0  # SHARED — ключевой параметр!
+            },
+            timeout=30
+        )
         resp.raise_for_status()
         data = resp.json()
-        if not data.get('success', False):
-            logger.error("SX.ORG create error: %s", data.get('message'))
+        logger.info("SX.ORG create-port ответ: %s", data)
+
+        if not data.get("success"):
+            logger.error("SX.ORG create error: %s", data.get('message', 'неизвестно'))
             return {}
-        proxy = data.get('data', {}) or {}
-        if isinstance(proxy, list):
-            proxy = proxy[0] if proxy else {}
+
+        p = data["data"][0] if isinstance(data["data"], list) else data["data"]
+        proxy_string = f"{p['login']}:{p['password']}@{p['server']}:{p['port']}"
+        refresh_link = p.get("refresh_link") or p.get("REFRESH_LINK", "")
+
         return {
-            'host': proxy.get('server', ''),
-            'port': str(proxy.get('port', '')),
-            'username': proxy.get('login', ''),
-            'password': proxy.get('password', ''),
-            'country': proxy.get('country_code', ''),
-            'city': proxy.get('city', ''),
-            'state': proxy.get('state', ''),
-            'type': 'Residential' if proxy.get('proxy_type_id') == 1 else 'Mobile' if proxy.get('proxy_type_id') == 3 else 'Corporate' if proxy.get('proxy_type_id') == 4 else 'Unknown',
-            'name': proxy.get('name', ''),
-            'traffic_used': proxy.get('spent_traffic_month', 0),
-            'traffic_limit': proxy.get('traffic_limit', 0)
+            'proxy_string': proxy_string,
+            'refresh_link': refresh_link,
+            'host': p.get('server', ''),
+            'port': str(p.get('port', '')),
+            'login': p.get('login', ''),
+            'password': p.get('password', ''),
         }
     except Exception as e:
         logger.error("Ошибка создания SX.ORG прокси: %s", e)
@@ -198,12 +171,49 @@ def create_sxorg_proxy(api_key: str, country_code: str, proxy_type_id: str, conn
     finally:
         session.close()
 
+
+def refresh_sxorg_ip(refresh_link: str) -> bool:
+    """Сменить внешний IP прокси через refresh_link."""
+    if not refresh_link:
+        logger.warning("refresh_link не задан")
+        return False
+    try:
+        r = requests.get(refresh_link, timeout=15)
+        data = r.json()
+        if data.get('success'):
+            logger.info("✅ IP прокси обновлён!")
+            return True
+        else:
+            logger.warning("⚠️ Не удалось обновить IP: %s", data)
+            return False
+    except Exception as e:
+        logger.error("Ошибка обновления IP: %s", e)
+        return False
+
 # ----------------- proxy file loader -----------------
-def load_proxy_file(file_path: str, proxy_method: str, api_key: Optional[str] = None, country: Optional[str] = None, city: Optional[str] = None, state: Optional[str] = None) -> List[Dict[str, str]]:
-    """Загрузка прокси. SX.ORG не мешает запуску без ключа, file работает как раньше"""
+def load_proxy_file(file_path: str, proxy_method: str, api_key: Optional[str] = None, proxy_string: Optional[str] = None, **kwargs) -> List[Dict[str, str]]:
+    """Загрузка прокси. sxorg использует сохранённый proxy_string, file читает файл."""
     if proxy_method == 'sxorg':
-        logger.info("Прокси SX.ORG успешно загружены!")
-        return []
+        # SX.ORG: используем сохранённый proxy_string (login:pass@host:port)
+        if not proxy_string:
+            logger.warning("⚠️ Прокси SX.ORG не создана! Зайдите в Настройки → Прокси → Создать прокси.")
+            return []
+        logger.info("="*60)
+        logger.info("🔄 ЗАГРУЗКА ПРОКСИ SX.ORG")
+        logger.info("="*60)
+        # Парсим login:pass@host:port
+        try:
+            auth_part, addr_part = proxy_string.rsplit('@', 1)
+            login, password = auth_part.split(':', 1)
+            host, port = addr_part.rsplit(':', 1)
+            logger.info("🌐 Прокси: %s:%s", host, port)
+            logger.info("👤 Логин: %s", login[:10] + "...")
+            logger.info("✅ Прокси загружена!")
+            logger.info("="*60)
+            return [{'host': host, 'port': port, 'username': login, 'password': password}]
+        except Exception as e:
+            logger.error("❌ Ошибка парсинга proxy_string '%s': %s", proxy_string, e)
+            return []
     elif proxy_method == 'file' and file_path:
         proxies = []
         try:
@@ -371,31 +381,23 @@ class ChromePathNotFound(Exception):
 
 class ChromeOptions(pydantic.BaseModel):
     binary_path: Optional[str] = None
-    disable_images: bool = True  # Отключаем картинки для скорости
+    disable_images: bool = True
     start_maximized: bool = False
-    headless: bool = True  # Включаем headless по умолчанию
+    headless: bool = True
     memory_limit: int = default_memory_limit()
     user_data_dir: Optional[str] = None
     proxy_file: Optional[str] = None
-    proxy_list: List[Dict[str, str]] = []
+    proxy_list: List[Dict[str, str]] = pydantic.Field(default_factory=list, exclude=True)
     proxy_method: str = 'sxorg'
     sxorg_api_key: Optional[str] = None
-    sxorg_country: Optional[str] = None
-    sxorg_city: Optional[str] = None
-    sxorg_state: Optional[str] = None
+    sxorg_proxy_string: Optional[str] = None   # login:pass@host:port
+    sxorg_refresh_link: Optional[str] = None   # URL для смены IP
 
     @field_validator('proxy_file')
     @classmethod
     def validate_proxy_file(cls, v: str | None, info: pydantic.ValidationInfo) -> str | None:
         if v and info.data.get('proxy_method') == 'file' and not os.path.exists(v):
             raise ValueError(f"Файл прокси {v} не существует")
-        return v
-
-    @field_validator('sxorg_api_key')
-    @classmethod
-    def validate_sxorg_api_key(cls, v: str | None, info: pydantic.ValidationInfo) -> str | None:
-        if info.data.get('proxy_method') == 'sxorg' and not v:
-            raise ValueError("API-ключ SX.ORG обязателен при выборе метода SX.ORG")
         return v
 
 # ChromeBrowser and ChromeRemote are restored for completeness; implementation similar to earlier versions
@@ -405,32 +407,29 @@ class ChromeBrowser:
         self._temp_dir = None
         self._process = None
         self._debug_port = None
+        self._proxy_user = None
+        self._proxy_pass = None
 
     def start(self):
         chrome_path = self.options.binary_path or locate_chrome_path()
         if not chrome_path:
             raise ChromePathNotFound("Chrome binary not found")
         
-        # Логируем настройки браузера
         logger.info("🔧 Настройки Chrome:")
         logger.info("   - headless: %s", self.options.headless)
         logger.info("   - disable_images: %s", self.options.disable_images)
         logger.info("   - proxy_method: %s", self.options.proxy_method)
         
-        # Создаём временную директорию СНАЧАЛА
         self._temp_dir = tempfile.mkdtemp()
         
-        # Загружаем прокси ПЕРЕД запуском браузера
+        # Загружаем прокси
         self.options.proxy_list = load_proxy_file(
             self.options.proxy_file,
             self.options.proxy_method,
             self.options.sxorg_api_key,
-            self.options.sxorg_country,
-            self.options.sxorg_city,
-            self.options.sxorg_state
+            self.options.sxorg_proxy_string
         )
         
-        # Generate port once and save it
         self._debug_port = free_port()
         args = [
             chrome_path, 
@@ -443,52 +442,42 @@ class ChromeBrowser:
             f"--user-data-dir={self._temp_dir}"
         ]
         
-        # Если есть прокси с авторизацией - ОТКЛЮЧАЕМ headless (он не поддерживает прокси-авторизацию)
-        proxy_has_auth = False
+        # Настройка прокси
         if self.options.proxy_list:
-            proxy = random.choice(self.options.proxy_list)
+            proxy = self.options.proxy_list[0]
             proxy_host = proxy.get('host')
             proxy_port = proxy.get('port')
-            proxy_user = proxy.get('username')
-            proxy_pass = proxy.get('password')
+            self._proxy_user = proxy.get('username', '')
+            self._proxy_pass = proxy.get('password', '')
             
-            logger.info("🔍 Прокси данные:")
-            logger.info("   Host: %s", proxy_host)
-            logger.info("   Port: %s", proxy_port)
-            logger.info("   User: %s", proxy_user)
-            logger.info("   Pass: %s", '***' if proxy_pass else None)
+            logger.info("=" * 60)
+            logger.info("🔧 НАСТРОЙКА ПРОКСИ")
+            logger.info("=" * 60)
+            logger.info("🌐 %s:%s", proxy_host, proxy_port)
             
-            if proxy_user and proxy_pass:
-                proxy_has_auth = True
-                logger.warning("⚠️  Прокси требует авторизацию - headless режим ОТКЛЮЧЕН")
-                # Создаём расширение Chrome для автоматической авторизации
-                logger.info("🔐 Создание расширения для автоматической авторизации прокси...")
-                proxy_auth_ext = self._create_proxy_auth_extension(
-                    proxy_host, proxy_port, proxy_user, proxy_pass
-                )
-                args.append(f"--load-extension={proxy_auth_ext}")
-                logger.info("✅ Расширение создано")
+            # Всегда используем --proxy-server (работает во всех версиях Chrome)
+            args.append(f"--proxy-server=http://{proxy_host}:{proxy_port}")
             
-            proxy_str = f"{proxy_host}:{proxy_port}"
-            args.append(f"--proxy-server={proxy_str}")
-            logger.info("🌐 Используется прокси: %s (RU резидентский)", proxy_str)
+            if self._proxy_user and self._proxy_pass:
+                logger.info("🔐 Прокси с авторизацией → CDP Fetch обработчик")
+                logger.info("   👤 Логин: %s", self._proxy_user[:15] + "...")
+            
+            logger.info("✅ Прокси подключена!")
+            logger.info("=" * 60)
         
-        # Headless режим только если НЕТ прокси с авторизацией
-        if self.options.headless and not proxy_has_auth:
+        # Headless режим
+        if self.options.headless:
             args.append("--headless=new")
             logger.info("👻 Headless режим включен")
             # Маскировка headless: подменяем user-agent и отключаем webdriver
             args.append('--disable-blink-features=AutomationControlled')
             args.append('--disable-infobars')
-            # Пример обычного user-agent Chrome для Mac
             ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             args.append(f'--user-agent={ua}')
-        elif proxy_has_auth:
-            logger.info("🖥️  Браузер запускается с GUI (требуется для прокси-авторизации)")
             
         if self.options.disable_images:
             args.append("--blink-settings=imagesEnabled=false")
-        if self.options.start_maximized and not proxy_has_auth:
+        if self.options.start_maximized:
             args.append("--start-maximized")
 
         self._process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -496,67 +485,81 @@ class ChromeBrowser:
         return self._process.pid
     
     def _create_proxy_auth_extension(self, host: str, port: str, username: str, password: str) -> str:
-        """Создаёт расширение Chrome для автоматической авторизации в прокси"""
+        """Создаёт расширение Chrome для установки прокси И авторизации (Manifest V2)
+        
+        Расширение управляет ВСЕМ:
+        1. chrome.proxy.settings.set() - устанавливает прокси
+        2. webRequest.onAuthRequired - автоматическая авторизация
+        """
         ext_dir = os.path.join(self._temp_dir, 'proxy_auth_extension')
         os.makedirs(ext_dir, exist_ok=True)
         
-        # manifest.json
-        manifest = {
-            "version": "1.0.0",
-            "manifest_version": 2,
-            "name": "Proxy Auto Auth",
-            "permissions": [
-                "proxy",
-                "tabs",
-                "unlimitedStorage",
-                "storage",
-                "<all_urls>",
-                "webRequest",
-                "webRequestBlocking"
-            ],
-            "background": {
-                "scripts": ["background.js"]
-            },
-            "minimum_chrome_version": "22.0.0"
-        }
+        # manifest.json (Manifest V2 - полный набор permissions)
+        manifest_json = """{
+    "version": "1.0.0",
+    "manifest_version": 2,
+    "name": "Chrome Proxy",
+    "permissions": [
+        "proxy",
+        "tabs",
+        "unlimitedStorage",
+        "storage",
+        "<all_urls>",
+        "webRequest",
+        "webRequestBlocking"
+    ],
+    "background": {
+        "scripts": ["background.js"]
+    },
+    "minimum_chrome_version": "22.0.0"
+}"""
         
-        with open(os.path.join(ext_dir, 'manifest.json'), 'w') as f:
-            json.dump(manifest, f)
+        with open(os.path.join(ext_dir, 'manifest.json'), 'w', encoding='utf-8') as f:
+            f.write(manifest_json)
         
-        # background.js
-        background_js = f"""
-var config = {{
+        # background.js - И прокси, И авторизация (проверенный подход со StackOverflow)
+        background_js = """var config = {
     mode: "fixed_servers",
-    rules: {{
-        singleProxy: {{
+    rules: {
+        singleProxy: {
             scheme: "http",
-            host: "{host}",
-            port: parseInt({port})
-        }},
+            host: "%s",
+            port: parseInt(%s)
+        },
         bypassList: ["localhost"]
-    }}
-}};
+    }
+};
 
-chrome.proxy.settings.set({{value: config, scope: "regular"}}, function() {{}});
+chrome.proxy.settings.set({value: config, scope: "regular"}, function() {
+    console.log('[Proxy] Прокси установлен: %s:%s');
+});
 
-function callbackFn(details) {{
-    return {{
-        authCredentials: {{
-            username: "{username}",
-            password: "{password}"
-        }}
-    }};
-}}
+function callbackFn(details) {
+    console.log('[Proxy Auth] Авторизация для:', details.url);
+    return {
+        authCredentials: {
+            username: "%s",
+            password: "%s"
+        }
+    };
+}
 
 chrome.webRequest.onAuthRequired.addListener(
     callbackFn,
-    {{urls: ["<all_urls>"]}},
+    {urls: ["<all_urls>"]},
     ['blocking']
 );
-"""
+
+console.log('[Proxy] Расширение загружено. Прокси: %s:%s, Логин: %s');
+""" % (host, port, host, port, username, password, host, port, username)
         
-        with open(os.path.join(ext_dir, 'background.js'), 'w') as f:
+        with open(os.path.join(ext_dir, 'background.js'), 'w', encoding='utf-8') as f:
             f.write(background_js)
+        
+        logger.info("   📁 Расширение создано: %s", ext_dir)
+        logger.info("   👤 Логин: %s", username)
+        logger.info("   🔑 Пароль: ***")
+        logger.info("   🌐 Прокси в расширении: %s:%s", host, port)
         
         return ext_dir
     
@@ -664,58 +667,39 @@ Object.defineProperty(navigator, 'userAgent', {get: () => 'Mozilla/5.0 (Macintos
                 else:
                     raise RuntimeError(f"Не удалось создать вкладку после {max_retries} попыток: {e}")
         
-        # Enable Fetch domain for proxy authentication
-        if self._browser.options.proxy_list:
-            proxy = self._browser.options.proxy_list[0]  # Используем первый прокси из списка
-            proxy_user = proxy.get('username')
-            proxy_pass = proxy.get('password')
-            
-            if proxy_user and proxy_pass:
-                logger.info("🔐 Настройка автоматической авторизации прокси через DevTools...")
-                try:
-                    # Enable Fetch domain
-                    self._tab.Fetch.enable(
-                        patterns=[{
-                            "urlPattern": "*",
-                            "requestStage": "Request"
-                        }]
-                    )
-                    
-                    # Set up auth handler
-                    def handle_auth_required(**params):
-                        request_id = params.get('requestId')
-                        auth_challenge = params.get('authChallenge')
-                        
-                        if auth_challenge:
-                            logger.info("🔓 Автоматическая авторизация прокси...")
-                            try:
-                                self._tab.Fetch.continueWithAuth(
-                                    requestId=request_id,
-                                    authChallengeResponse={
-                                        "response": "ProvideCredentials",
-                                        "username": proxy_user,
-                                        "password": proxy_pass
-                                    }
-                                )
-                                logger.info("✅ Прокси авторизован")
-                            except Exception as e:
-                                logger.error("❌ Ошибка авторизации: %s", e)
-                                # Continue without auth on error
-                                try:
-                                    self._tab.Fetch.continueRequest(requestId=request_id)
-                                except:
-                                    pass
-                        else:
-                            # No auth required, continue normally
-                            try:
-                                self._tab.Fetch.continueRequest(requestId=request_id)
-                            except:
-                                pass
-                    
-                    self._tab.Fetch.requestPaused = handle_auth_required
-                    logger.info("✅ Автоматическая авторизация настроена")
-                except Exception as e:
-                    logger.warning("⚠️ Не удалось настроить автоматическую авторизацию: %s", e)
+        # CDP Fetch для авторизации прокси (MV2 расширения не работают в Chrome 120+)
+        proxy_user = getattr(self._browser, '_proxy_user', '')
+        proxy_pass = getattr(self._browser, '_proxy_pass', '')
+        if proxy_user and proxy_pass:
+            try:
+                def _on_auth_required(**kwargs):
+                    request_id = kwargs.get('requestId')
+                    logger.debug("🔐 Proxy auth required for: %s", kwargs.get('request', {}).get('url', '')[:80])
+                    try:
+                        self._tab.Fetch.continueWithAuth(
+                            requestId=request_id,
+                            authChallengeResponse={
+                                'response': 'ProvideCredentials',
+                                'username': proxy_user,
+                                'password': proxy_pass,
+                            }
+                        )
+                    except Exception as e:
+                        logger.debug("Auth response error: %s", e)
+
+                def _on_request_paused(**kwargs):
+                    request_id = kwargs.get('requestId')
+                    try:
+                        self._tab.Fetch.continueRequest(requestId=request_id)
+                    except Exception:
+                        pass
+
+                self._tab.Fetch.authRequired = _on_auth_required
+                self._tab.Fetch.requestPaused = _on_request_paused
+                self._tab.Fetch.enable(handleAuthRequests=True)
+                logger.info("✓ CDP Fetch: авторизация прокси настроена")
+            except Exception as e:
+                logger.warning("⚠️ Не удалось настроить CDP Fetch auth: %s", e)
         
         # Enable network monitoring
         try:
@@ -893,6 +877,7 @@ class Configuration(pydantic.BaseModel):
     log: LogOptions = LogOptions()
     parser: ParserOptions = ParserOptions()
     writer: WriterOptions = WriterOptions()
+    url_history: List[str] = pydantic.Field(default_factory=list)
 
     def merge_with(self, other: 'Configuration'):
         for key in Configuration.model_fields.keys():
@@ -971,16 +956,21 @@ def gui_settings(config: Configuration) -> None:
     ttk.Label(top_frame, text="Метод прокси:").pack(side=tk.LEFT)
     PROXY_DISPLAY_TO_VALUE = {"Из файла": "file", "SX.ORG (Рекомендовано)": "sxorg"}
     PROXY_VALUE_TO_DISPLAY = {v: k for k, v in PROXY_DISPLAY_TO_VALUE.items()}
-    # SX.ORG is default
-    proxy_method_var = tk.StringVar(value=PROXY_VALUE_TO_DISPLAY.get(config.chrome.proxy_method, "SX.ORG (Рекомендовано)"))
-    proxy_method_combo = ttk.Combobox(top_frame, textvariable=proxy_method_var, values=list(PROXY_DISPLAY_TO_VALUE.keys()), state="readonly", width=36)
-    proxy_method_combo.pack(side=tk.LEFT, padx=(8,0))
+    # Radio-переключатель вместо combobox
+    proxy_method_var = tk.StringVar(value=config.chrome.proxy_method or "sxorg")
+    tk.Radiobutton(top_frame, text="SX.ORG (Рекомендовано)", variable=proxy_method_var,
+                   value="sxorg", bg="#1B5E20", fg="white", selectcolor="#2E7D32",
+                   activebackground="#1B5E20", activeforeground="white",
+                   font=("TkDefaultFont", 9, "bold")).pack(side=tk.LEFT, padx=(12,4))
+    tk.Radiobutton(top_frame, text="Из файла", variable=proxy_method_var,
+                   value="file", bg="#1B5E20", fg="white", selectcolor="#2E7D32",
+                   activebackground="#1B5E20", activeforeground="white").pack(side=tk.LEFT, padx=4)
 
     main = ttk.Frame(proxy_frame)
     main.pack(fill=tk.BOTH, expand=True, padx=8, pady=6)
     left = ttk.Frame(main)
     left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-    right = tk.Frame(main, width=260, bg="#FFF9C4", relief=tk.GROOVE, bd=1)
+    right = tk.Frame(main, width=260, bg="#1B5E20", relief=tk.FLAT, bd=0)
     right.pack(side=tk.RIGHT, fill=tk.Y, padx=(8,0))
 
     # File controls
@@ -998,17 +988,33 @@ def gui_settings(config: Configuration) -> None:
     sx_paste_btn = ttk.Button(sx_frame, text="Вставить")
     sx_balance_var = tk.StringVar(value="Баланс: неизвестно")
     sx_balance_label = ttk.Label(left, textvariable=sx_balance_var)
-    sx_import_btn = ttk.Button(left, text="Импортировать прокси SX.ORG")
-    sx_create_btn = ttk.Button(left, text="Создать новый прокси SX.ORG")
-    sx_listbox = tk.Listbox(left, height=8, width=72)
+    sx_create_btn = ttk.Button(left, text="🚀 Создать прокси для работы")
+    sx_refresh_btn = ttk.Button(left, text="🔄 Сменить IP прокси")
+    sx_proxy_var = tk.StringVar(value="")
+    sx_proxy_label = ttk.Label(left, textvariable=sx_proxy_var, font=("TkDefaultFont", 9, "bold"))
+    sx_status_var = tk.StringVar(value="Прокси: не создана")
+    sx_status_label = ttk.Label(left, textvariable=sx_status_var)
 
-    # Right banner
-    banner_title = tk.Label(right, text="SX.ORG — промокод 2GiS", bg="#FFF9C4", fg="#2E7D32", font=("TkDefaultFont", 11, "bold"), anchor="w")
-    banner_text = tk.Label(right, text="Получите +3 ГБ трафика по промокоду.\nНажмите кнопку для перехода на сайт.", bg="#FFF9C4", fg="#000000", justify="left", wraplength=220)
-    banner_btn = ttk.Button(right, text="Получить прокси SX.ORG", command=lambda: webbrowser.open("https://sx.org/ru/?c=parse"))
-    banner_title.pack(anchor="n", fill=tk.X, pady=(12,4), padx=8)
-    banner_text.pack(anchor="n", fill=tk.X, padx=8)
-    banner_btn.pack(anchor="n", pady=(8,12))
+    # Right banner — стиль в тон темы
+    banner_title_lbl = tk.Label(right, text="Прокси", bg="#1B5E20", fg="#A5D6A7",
+                                font=("TkDefaultFont", 18, "bold"))
+    banner_brand = tk.Label(right, text="SX.ORG", bg="#1B5E20", fg="#FFFFFF",
+                            font=("TkDefaultFont", 13, "bold"))
+    banner_sub = tk.Label(right, text="Промокод: ZHdMCL", bg="#1B5E20", fg="#FFFFFF",
+                          font=("TkDefaultFont", 10, "bold"))
+    banner_text = tk.Label(right, text="+3 ГБ трафика бесплатно\nпри регистрации",
+                          bg="#1B5E20", fg="#C8E6C9", justify="center", wraplength=220,
+                          font=("TkDefaultFont", 9))
+    banner_btn = tk.Button(right, text="Получить прокси SX.ORG",
+                           bg="#43A047", fg="white", activebackground="#66BB6A",
+                           activeforeground="white", relief=tk.FLAT, bd=0,
+                           font=("TkDefaultFont", 10, "bold"), cursor="hand2", padx=12, pady=6,
+                           command=lambda: webbrowser.open("https://sx.org/?c=ZHdMCL"))
+    banner_title_lbl.pack(pady=(20, 2))
+    banner_brand.pack(pady=(0, 4))
+    banner_sub.pack(pady=(6, 2))
+    banner_text.pack(pady=(2, 10), padx=12)
+    banner_btn.pack(pady=(0, 16))
 
     ttk.Button(left, text="Инструкция по настройке ПРОКСИ", command=lambda: webbrowser.open("https://docs.google.com/document/d/1V5TB00h8W3B9arFZUK9uhuYxk_fxjAj5AXK9qgnL7lk/edit?usp=sharing")).pack(anchor="w", padx=4, pady=(0,8))
 
@@ -1063,8 +1069,10 @@ def gui_settings(config: Configuration) -> None:
     def show_file_ui():
         sx_frame.pack_forget()
         sx_balance_label.pack_forget()
-        sx_import_btn.pack_forget()
-        sx_listbox.pack_forget()
+        sx_create_btn.pack_forget()
+        sx_refresh_btn.pack_forget()
+        sx_status_label.pack_forget()
+        sx_proxy_label.pack_forget()
         proxy_file_label.pack(anchor="w", padx=6, pady=(6,2))
         proxy_file_entry.pack(anchor="w", padx=6, pady=2)
         proxy_file_browse.pack(anchor="w", padx=6, pady=2)
@@ -1079,12 +1087,28 @@ def gui_settings(config: Configuration) -> None:
         sx_ok_btn.pack(side=tk.LEFT)
         sx_paste_btn.pack(side=tk.LEFT, padx=(6,0))
         sx_balance_label.pack(anchor="w", padx=6, pady=(8,2))
-        sx_import_btn.pack(anchor="w", padx=6, pady=(8,4))
-        sx_create_btn.pack(anchor="w", padx=6, pady=(4,4))
-        sx_listbox.pack(anchor="w", padx=6, pady=(4,6))
+        sx_create_btn.pack(anchor="w", padx=6, pady=(8,4))
+        sx_refresh_btn.pack(anchor="w", padx=6, pady=(4,4))
+        sx_status_label.pack(anchor="w", padx=6, pady=(4,2))
+        sx_proxy_label.pack(anchor="w", padx=6, pady=(2,6))
+    
+    def _update_proxy_display():
+        """Обновляет отображение текущей прокси в UI"""
+        ps = config.chrome.sxorg_proxy_string
+        if ps:
+            # Показываем логин скрыто
+            parts = ps.split('@')
+            if len(parts) == 2:
+                sx_proxy_var.set(f"🌐 {parts[1]}")
+            else:
+                sx_proxy_var.set(f"🌐 {ps}")
+            sx_status_var.set("Прокси: ✅ активна")
+        else:
+            sx_proxy_var.set("")
+            sx_status_var.set("Прокси: не создана")
 
     def on_method_change(*args):
-        value = PROXY_DISPLAY_TO_VALUE.get(proxy_method_var.get(), "file")
+        value = proxy_method_var.get()
         if value == "file":
             show_file_ui()
         else:
@@ -1117,72 +1141,83 @@ def gui_settings(config: Configuration) -> None:
         if not key:
             messagebox.showwarning("API-ключ", "Введите API-ключ SX.ORG.")
             return
+        logger.info("💾 Сохранение API-ключа SX.ORG...")
         config.chrome.sxorg_api_key = key
-        config.save_config()
+        config.save_config()  # Сохраняем конфиг сразу!
+        logger.info("✅ API-ключ сохранен в конфигурацию")
         sx_balance_var.set("Баланс: обновление...")
         def _fetch():
             bal = get_sxorg_balance(key)
             sx_balance_var.set(f"Баланс: {bal} $")
+            logger.info("💰 Баланс SX.ORG: %s $", bal)
         threading.Thread(target=_fetch, daemon=True).start()
-        messagebox.showinfo("API-ключ", "API-ключ сохранён.")
+        messagebox.showinfo("API-ключ сохранён", f"API-ключ сохранён!\n\nКлюч: {key[:10]}...\n\nТеперь можете импортировать прокси.")
     sx_ok_btn.config(command=sx_ok_cmd)
 
-    # Import command: load proxies
-    def sx_import_cmd():
-        api = sx_entry.get().strip() or config.chrome.sxorg_api_key
-        if not api:
-            messagebox.showwarning("API-ключ", "Введите API-ключ SX.ORG и нажмите OK.")
+    # Refresh IP command
+    def sx_refresh_cmd():
+        link = config.chrome.sxorg_refresh_link
+        if not link:
+            messagebox.showwarning("Нет прокси", "Сначала создайте прокси (кнопка Создать).")
             return
-        sx_listbox.delete(0, tk.END)
-        sx_listbox.insert(tk.END, "Загрузка...")
-        def _load():
-            proxies = load_sxorg_proxies(api)
-            sx_listbox.delete(0, tk.END)
-            config.chrome.proxy_list = proxies
-            for p in proxies:
-                auth = f" ({p.get('username')}:{p.get('password')})" if p.get('username') else ""
-                sx_listbox.insert(tk.END, f"{p.get('host')}:{p.get('port')}{auth} [{p.get('type')}] {p.get('country')} {p.get('city')}")
-            config.chrome.sxorg_api_key = api
-            config.save_config()
-            messagebox.showinfo("Импорт", f"Импортировано {len(proxies)} прокси" if proxies else "Список прокси пуст или произошла ошибка.")
-        threading.Thread(target=_load, daemon=True).start()
-    sx_import_btn.config(command=sx_import_cmd)
+        logger.info("🔄 Смена IP прокси...")
+        sx_status_var.set("Прокси: ⏳ смена IP...")
+        def _refresh():
+            try:
+                ok = refresh_sxorg_ip(link)
+                if ok:
+                    sx_status_var.set("Прокси: ✅ IP обновлён")
+                    logger.info("✅ IP прокси успешно обновлён")
+                else:
+                    sx_status_var.set("Прокси: ❌ ошибка смены IP")
+                    logger.error("❌ Не удалось сменить IP")
+            except Exception as e:
+                sx_status_var.set("Прокси: ❌ ошибка")
+                logger.error("❌ Ошибка смены IP: %s", e)
+        threading.Thread(target=_refresh, daemon=True).start()
+    sx_refresh_btn.config(command=sx_refresh_cmd)
 
-    # Create proxy command
+    # Create proxy command — SHARED mobile proxy via SX.ORG API
     def sx_create_cmd():
         api = sx_entry.get().strip() or config.chrome.sxorg_api_key
         if not api:
             messagebox.showwarning("API-ключ", "Введите API-ключ SX.ORG и нажмите OK.")
             return
         
-        # Автоматическое создание русского резидентского прокси без диалогов
-        result_msg = "Создание русского резидентского прокси..."
-        logger.info("🚀 %s", result_msg)
+        logger.info("🚀 Создание мобильной прокси РФ (shared)...")
+        sx_status_var.set("Прокси: ⏳ создаём...")
         
-        try:
-            proxy = create_sxorg_proxy(
-                api_key=api,
-                country_code="RU",
-                proxy_type_id="1",  # Residential
-                connection_type_id="1",  # HTTP/HTTPS
-                name=None,
-                traffic_limit=None
-            )
-            
-            if proxy and proxy.get('host'):
-                success_msg = f"✅ Создан: {proxy['host']}:{proxy['port']}\nЛогин: {proxy.get('username', '')}\nПароль: {proxy.get('password', '')}"
-                logger.info(success_msg)
-                # Refresh list
-                sx_import_cmd()
-                messagebox.showinfo("Успех", success_msg)
-            else:
-                error_msg = "❌ Не удалось создать прокси. Проверьте баланс SX.ORG"
-                logger.error(error_msg)
-                messagebox.showerror("Ошибка", error_msg)
-        except Exception as e:
-            error_msg = f"❌ Ошибка создания прокси: {str(e)}"
-            logger.error(error_msg)
-            messagebox.showerror("Ошибка", error_msg)
+        def _create():
+            try:
+                result = create_sxorg_proxy(api)
+                if result and result.get('proxy_string'):
+                    config.chrome.sxorg_proxy_string = result['proxy_string']
+                    config.chrome.sxorg_refresh_link = result.get('refresh_link', '')
+                    config.chrome.sxorg_api_key = api
+                    config.chrome.proxy_list = [{
+                        'host': result['host'],
+                        'port': result['port'],
+                        'username': result['login'],
+                        'password': result['password'],
+                    }]
+                    config.save_config()
+                    _update_proxy_display()
+                    logger.info("✅ Прокси создана: %s:%s", result['host'], result['port'])
+                    messagebox.showinfo("Успех!",
+                        f"✅ Мобильная прокси РФ создана!\n\n"
+                        f"Сервер: {result['host']}:{result['port']}\n"
+                        f"Логин: {result['login']}\n\n"
+                        f"Прокси сохранена и будет использоваться автоматически.\n"
+                        f"Кнопка 'Сменить IP' — для ротации адреса.")
+                else:
+                    sx_status_var.set("Прокси: ❌ ошибка создания")
+                    logger.error("❌ Не удалось создать прокси")
+                    messagebox.showerror("Ошибка", "Не удалось создать прокси.\nПроверьте баланс и API-ключ.")
+            except Exception as e:
+                sx_status_var.set("Прокси: ❌ ошибка")
+                logger.error("❌ Ошибка создания прокси: %s", e)
+                messagebox.showerror("Ошибка", f"Ошибка создания прокси:\n{e}")
+        threading.Thread(target=_create, daemon=True).start()
     
     sx_create_btn.config(command=sx_create_cmd)
 
@@ -1194,13 +1229,13 @@ def gui_settings(config: Configuration) -> None:
         config.chrome.start_maximized = start_maximized_var.get()
         config.chrome.headless = headless_var.get()
         config.chrome.memory_limit = memory_limit_var.get()
-        selected_display = proxy_method_var.get()
-        config.chrome.proxy_method = PROXY_DISPLAY_TO_VALUE.get(selected_display, "file")
+        config.chrome.proxy_method = proxy_method_var.get()
         if config.chrome.proxy_method == "file":
             config.chrome.proxy_file = proxy_file_var.get() or None
         else:
             if sx_entry.get().strip():
                 config.chrome.sxorg_api_key = sx_entry.get().strip()
+            # sxorg_proxy_string и sxorg_refresh_link уже сохранены при создании
         # parser options
         config.parser.skip_404_response = skip_404_var.get()
         config.parser.delay_between_clicks = delay_clicks_var.get()
@@ -1222,21 +1257,13 @@ def gui_settings(config: Configuration) -> None:
     if config.chrome.sxorg_api_key:
         sx_entry.delete(0, tk.END)
         sx_entry.insert(0, config.chrome.sxorg_api_key)
+        _update_proxy_display()
         def _preload():
             try:
                 bal = get_sxorg_balance(config.chrome.sxorg_api_key)
                 sx_balance_var.set(f"Баланс: {bal} $")
             except Exception:
                 sx_balance_var.set("Баланс: неизвестно")
-            try:
-                proxies = load_sxorg_proxies(config.chrome.sxorg_api_key)
-                sx_listbox.delete(0, tk.END)
-                for p in proxies:
-                    auth = f" ({p.get('username')}:{p.get('password')})" if p.get('username') else ""
-                    sx_listbox.insert(tk.END, f"{p.get('host')}:{p.get('port')}{auth} [{p.get('type')}] {p.get('country')} {p.get('city')}")
-                config.chrome.proxy_list = proxies
-            except Exception:
-                pass
         threading.Thread(target=_preload, daemon=True).start()
 
     window.transient()
@@ -1981,29 +2008,44 @@ class GUIRunner(threading.Thread):
                 
     def run(self):
         try:
-            logger.info("Запуск парсера...")
+            logger.info("🔧 Инициализация парсера...")
+            logger.info("📊 URLs для парсинга: %d", len(self.urls))
+            logger.info("💾 Формат вывода: %s", self.file_format.upper())
+            logger.info("📁 Файл результата: %s", self.output_path)
+            logger.info("")
+            
             self.parser = Parser2GIS(self.config)
             self.parser.start()
             
             all_items = []
             
-            for url in self.urls:
+            for idx, url in enumerate(self.urls, 1):
                 if self._stop_event.is_set():
-                    logger.info("Парсинг остановлен пользователем")
+                    logger.info("⏹ Парсинг остановлен пользователем")
                     break
                     
                 try:
-                    logger.info("Парсинг URL: %s", url)
+                    logger.info("")
+                    logger.info("📌 [%d/%d] Парсинг URL: %s", idx, len(self.urls), url)
+                    logger.info("-" * 60)
                     items = self.parser.parse_url(url)
                     all_items.extend(items)
                     
-                    if self.config.writer.verbose:
-                        for item in items:
-                            logger.info("  ✓ %s", item.name)
+                    logger.info("✅ Найдено записей: %d", len(items))
+                    logger.info("📊 Всего собрано: %d записей", len(all_items))
+                    
+                    if self.config.writer.verbose and items:
+                        logger.info("")
+                        logger.info("📋 Примеры найденных организаций:")
+                        for i, item in enumerate(items[:5], 1):  # Show first 5
+                            logger.info("  %d. %s", i, item.name)
+                        if len(items) > 5:
+                            logger.info("  ... и ещё %d", len(items) - 5)
                     
                     # Check max records limit
                     if len(all_items) >= self.config.parser.max_records:
-                        logger.info("Достигнут лимит записей: %d", self.config.parser.max_records)
+                        logger.info("")
+                        logger.info("⚠️  Достигнут лимит записей: %d", self.config.parser.max_records)
                         all_items = all_items[:self.config.parser.max_records]
                         break
                         
@@ -2012,24 +2054,42 @@ class GUIRunner(threading.Thread):
                         time.sleep(self.config.parser.delay_between_clicks / 1000.0)
                         
                 except Exception as e:
-                    logger.error("Ошибка при парсинге %s: %s", url, e)
+                    logger.error("❌ Ошибка при парсинге %s: %s", url, e)
                     if not self.config.parser.skip_404_response:
                         raise
                         
             # Stop browser
+            logger.info("")
+            logger.info("🔄 Закрытие браузера...")
             self.parser.stop()
             
             # Write results
             if all_items:
-                logger.info("Всего собрано записей: %d", len(all_items))
+                logger.info("")
+                logger.info("=" * 60)
+                logger.info("💾 СОХРАНЕНИЕ РЕЗУЛЬТАТОВ")
+                logger.info("=" * 60)
+                logger.info("📊 Всего собрано записей: %d", len(all_items))
+                logger.info("📁 Сохранение в: %s", self.output_path)
                 writer = Writer(self.config)
                 writer.write(all_items, self.output_path, self.file_format)
-                logger.info("✓ Парсинг завершён успешно!")
+                logger.info("")
+                logger.info("=" * 60)
+                logger.info("✅ ПАРСИНГ ЗАВЕРШЁН УСПЕШНО!")
+                logger.info("=" * 60)
+                logger.info("📊 Собрано: %d записей", len(all_items))
+                logger.info("📁 Файл: %s", self.output_path)
+                logger.info("=" * 60)
             else:
-                logger.warning("Не найдено ни одной записи")
+                logger.warning("")
+                logger.warning("⚠️  Не найдено ни одной записи")
+                logger.warning("Проверьте URL и настройки прокси")
                 
         except Exception as e:
-            logger.exception("Критическая ошибка парсера: %s", e)
+            logger.error("")
+            logger.error("=" * 60)
+            logger.exception("❌ КРИТИЧЕСКАЯ ОШИБКА ПАРСЕРА")
+            logger.error("=" * 60)
         finally:
             if self.parser:
                 try:
@@ -2040,8 +2100,8 @@ class GUIRunner(threading.Thread):
 # ----------------- Main GUI -----------------
 def gui_app(urls: List[str], output_path: str, format: str, config: Configuration) -> None:
     root = tk.Tk()
-    root.title("Парсер 2GIS")
-    root.geometry("900x700")
+    root.title(f"Парсер 2GIS v{VERSION} - Профессиональный сбор данных")
+    root.geometry("1000x750")
     style = ttk.Style()
     try:
         style.theme_create("2gisgreen", parent="default", settings={
@@ -2067,33 +2127,98 @@ def gui_app(urls: List[str], output_path: str, format: str, config: Configuratio
     root.configure(bg="#1B5E20")
     log_queue: queue.Queue = queue.Queue()
     setup_gui_logger(log_queue, config.log)
+
+    # --- Update banner (hidden by default, shown if new version found) ---
+    update_bar = tk.Frame(root, bg="#FFF9C4", height=36)
+    update_msg_var = tk.StringVar()
+    update_url_holder = [None]  # mutable holder for URL
+    tk.Label(update_bar, textvariable=update_msg_var, bg="#FFF9C4", fg="#333333",
+             font=("TkDefaultFont", 9, "bold")).pack(side=tk.LEFT, padx=10)
+    update_download_btn = tk.Button(update_bar, text="⬇ Скачать обновление",
+                                     bg="#43A047", fg="white", activebackground="#66BB6A",
+                                     activeforeground="white", relief=tk.FLAT, bd=0,
+                                     font=("TkDefaultFont", 9, "bold"), cursor="hand2", padx=8, pady=2,
+                                     command=lambda: webbrowser.open(update_url_holder[0]) if update_url_holder[0] else None)
+    update_download_btn.pack(side=tk.LEFT, padx=6)
+    update_close_btn = tk.Button(update_bar, text="✕", bg="#FFF9C4", fg="#666666",
+                                  relief=tk.FLAT, bd=0, cursor="hand2",
+                                  command=lambda: update_bar.pack_forget())
+    update_close_btn.pack(side=tk.RIGHT, padx=6)
+
+    def _check_updates_bg():
+        info = check_for_updates()
+        if info:
+            update_msg_var.set(f"🔔  Доступна новая версия v{info['version']}!")
+            update_url_holder[0] = info['url']
+            update_bar.pack(fill=tk.X, before=main_frame)
+            logger.info("🔔 Доступно обновление: v%s → v%s", VERSION, info['version'])
+            if info.get('notes'):
+                logger.info("   Изменения: %s", info['notes'][:120])
+    threading.Thread(target=_check_updates_bg, daemon=True).start()
+    
+    # Welcome message
+    logger.info("=" * 60)
+    logger.info("🚀 Parser 2GIS v%s - Профессиональный парсер данных", VERSION)
+    logger.info("=" * 60)
+    logger.info("✨ Добро пожаловать!")
+    logger.info("")
+    logger.info("📋 Возможности:")
+    logger.info("  • Парсинг организаций, телефонов, адресов из 2GIS")
+    logger.info("  • Поддержка SX.ORG прокси (резидентские, мобильные)")
+    logger.info("  • Headless режим для максимальной скорости")
+    logger.info("  • Экспорт в CSV, XLSX, JSON")
+    logger.info("")
+    logger.info("⚙️  Текущие настройки:")
+    logger.info("  • Headless: %s", "Да" if config.chrome.headless else "Нет")
+    logger.info("  • Прокси: %s", config.chrome.proxy_method.upper())
+    if config.chrome.proxy_method == "sxorg" and config.chrome.sxorg_api_key:
+        logger.info("  • SX.ORG API: настроен ✅")
+    elif config.chrome.proxy_method == "sxorg":
+        logger.info("  • SX.ORG API: НЕ НАСТРОЕН ⚠️")
+        logger.info("  • Откройте Настройки → Прокси для настройки")
+    logger.info("")
+    logger.info("💡 Подсказка: Используйте SX.ORG для надежного парсинга!")
+    logger.info("   Получите +3 ГБ по промокоду: Настройки → Прокси")
+    logger.info("=" * 60)
+    logger.info("")
+    
     main_frame = ttk.Frame(root, padding=8)
     main_frame.pack(fill=tk.BOTH, expand=True)
     url_frame = ttk.Frame(main_frame)
     url_frame.pack(fill=tk.X, pady=4)
     ttk.Label(url_frame, text="URL").pack(side=tk.LEFT, padx=6)
-    url_entry = ttk.Entry(url_frame)
-    url_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+    
+    # История URL (сохраняем в конфиге)
+    url_history = getattr(config, 'url_history', []) if hasattr(config, 'url_history') else []
+    
+    url_var = tk.StringVar()
+    url_combo = ttk.Combobox(url_frame, textvariable=url_var, values=url_history)
+    url_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+    
+    def add_to_history(url):
+        """Добавляет URL в историю"""
+        if url and url not in url_history:
+            url_history.insert(0, url)
+            if len(url_history) > 20:  # Максимум 20 URL
+                url_history.pop()
+            url_combo['values'] = url_history
+            # Сохраняем в конфиг
+            config.url_history = list(url_history)
+            config.save_config()
+    
     def open_urls_editor():
         new = gui_urls_editor(urls) or urls
         urls[:] = new
         update_urls_input()
     ttk.Button(url_frame, text="...", command=open_urls_editor).pack(side=tk.LEFT, padx=6)
-    ttk.Button(url_frame, text="Настройки", command=lambda: gui_settings(config)).pack(side=tk.LEFT, padx=6)
     def update_urls_input():
         urls_length = len(urls)
         if urls_length == 0:
-            url_entry.config(state="normal")
-            url_entry.delete(0, tk.END)
+            url_var.set("")
         elif urls_length == 1:
-            url_entry.config(state="normal")
-            url_entry.delete(0, tk.END)
-            url_entry.insert(0, urls[0])
+            url_var.set(urls[0])
         else:
-            url_entry.config(state="normal")
-            url_entry.delete(0, tk.END)
-            url_entry.insert(0, f"<{urls_length} ссылок>")
-            url_entry.config(state="disabled")
+            url_var.set(f"<{urls_length} ссылок>")
     update_urls_input()
     # result
     result_frame = ttk.Frame(main_frame)
@@ -2115,12 +2240,19 @@ def gui_app(urls: List[str], output_path: str, format: str, config: Configuratio
     progress.pack(fill=tk.X, pady=6)
     bottom_frame = ttk.Frame(main_frame)
     bottom_frame.pack(fill=tk.X, pady=6)
-    ttk.Label(bottom_frame, text=f"v{VERSION}").pack(side=tk.LEFT, padx=6)
-    start_btn = ttk.Button(bottom_frame, text="Запуск")
+    
+    # Status label
+    status_var = tk.StringVar(value="Готов к работе 🟢")
+    status_label = ttk.Label(bottom_frame, textvariable=status_var, font=("TkDefaultFont", 9, "bold"))
+    status_label.pack(side=tk.LEFT, padx=6)
+    
+    ttk.Label(bottom_frame, text=f"v{VERSION}").pack(side=tk.LEFT, padx=(0, 20))
+    start_btn = ttk.Button(bottom_frame, text="▶ Запуск")
     start_btn.pack(side=tk.LEFT, padx=6)
-    stop_btn = ttk.Button(bottom_frame, text="Стоп", state="disabled")
+    stop_btn = ttk.Button(bottom_frame, text="⏹ Стоп", state="disabled")
     stop_btn.pack(side=tk.LEFT, padx=6)
-    ttk.Button(bottom_frame, text="Выход", command=root.destroy).pack(side=tk.RIGHT, padx=6)
+    ttk.Button(bottom_frame, text="⚙ Настройки", command=lambda: gui_settings(config)).pack(side=tk.LEFT, padx=6)
+    ttk.Button(bottom_frame, text="❌ Выход", command=root.destroy).pack(side=tk.RIGHT, padx=6)
     parsing_thread: List[Optional[GUIRunner]] = [None]
     def parsing_thread_running() -> bool:
         return parsing_thread[0] is not None and parsing_thread[0].is_alive()
@@ -2128,23 +2260,34 @@ def gui_app(urls: List[str], output_path: str, format: str, config: Configuratio
         if not output_var.get():
             messagebox.showerror("Ошибка", "Отсутствует путь результирующего файла!")
             return
-        if url_entry.cget("state") == "normal" and not url_entry.get():
-            messagebox.showerror("Ошибка", "Отсутствует URL!")
-            return
-        if url_entry.cget("state") == "normal" and url_entry.get():
-            urls[:] = [url_entry.get()]
+        current_url = url_var.get().strip()
+        if not current_url or current_url.startswith("<"):
+            if len(urls) == 0:
+                messagebox.showerror("Ошибка", "Отсутствует URL!")
+                return
+        else:
+            urls[:] = [current_url]
+            add_to_history(current_url)  # Добавляем в историю
         if not parsing_thread_running():
             try:
+                status_var.set("Запуск парсера... 🔄")
+                logger.info("")
+                logger.info("🚀 СТАРТ ПАРСИНГА")
+                logger.info("=" * 60)
                 progress.start()
                 parsing_thread[0] = GUIRunner(list(urls), output_var.get(), format_var.get(), config)
                 parsing_thread[0].start()
                 start_btn.config(state="disabled")
                 stop_btn.config(state="normal")
+                status_var.set("Парсинг в процессе... ⚙️")
             except Exception as e:
-                logger.exception("Ошибка запуска парсера: %s", e)
+                logger.exception("❌ Ошибка запуска парсера: %s", e)
                 progress.stop()
                 parsing_thread[0] = None
+                status_var.set("Ошибка! 🔴")
     def on_stop():
+        logger.info("⏹ Остановка парсера...")
+        status_var.set("Остановка... ⏸️")
         if parsing_thread_running():
             parsing_thread[0].stop()
             parsing_thread[0].join(timeout=5)
@@ -2152,6 +2295,8 @@ def gui_app(urls: List[str], output_path: str, format: str, config: Configuratio
         stop_btn.config(state="disabled")
         start_btn.config(state="normal")
         progress.stop()
+        status_var.set("Остановлено ⏹")
+        logger.info("✓ Парсер остановлен")
     start_btn.config(command=on_start)
     stop_btn.config(command=on_stop)
     def update_log():
@@ -2166,6 +2311,10 @@ def gui_app(urls: List[str], output_path: str, format: str, config: Configuratio
             start_btn.config(state="disabled")
             stop_btn.config(state="normal")
         else:
+            # Thread stopped - check if it was manual stop or completion
+            if parsing_thread[0] is not None and not parsing_thread[0].is_alive():
+                # Thread completed
+                status_var.set("Готов к работе 🟢")
             start_btn.config(state="normal")
             stop_btn.config(state="disabled")
             progress.stop()
@@ -2246,9 +2395,6 @@ def parse_arguments() -> tuple[argparse.Namespace, Configuration]:
     browser_parser.add_argument("--chrome.proxy_file", metavar="PATH", help="Путь до файла с прокси (IP:PORT или IP:PORT:USERNAME:PASSWORD)")
     browser_parser.add_argument("--chrome.proxy_method", choices=["file", "sxorg"], default="file", help="Метод получения прокси (file или sxorg)")
     browser_parser.add_argument("--chrome.sxorg_api_key", metavar="KEY", help="API-ключ для SX.ORG")
-    browser_parser.add_argument("--chrome.sxorg_country", metavar="COUNTRY", help="Страна для прокси SX.ORG (например, US)")
-    browser_parser.add_argument("--chrome.sxorg_state", metavar="STATE", help="Штат для прокси SX.ORG (например, New York)")
-    browser_parser.add_argument("--chrome.sxorg_city", metavar="CITY", help="Город для прокси SX.ORG (например, New York)")
     other_parser = arg_parser.add_argument_group("Прочие аргументы")
     other_parser.add_argument("--writer.encoding", choices=["utf8", "1251"], default="utf8", help="Кодировка результирующего файла")
     other_parser.add_argument("--writer.verbose", choices=["yes", "no"], default="yes", help="Выводить имена парсируемых объектов")
