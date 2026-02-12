@@ -39,7 +39,7 @@ from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 
 # Версия программы
-VERSION = "1.3.1"
+VERSION = "1.3.2"
 GITHUB_REPO = "Inter1ark/Parser-2gis"
 
 # Проверка платформы
