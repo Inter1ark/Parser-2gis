@@ -39,7 +39,7 @@ from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 
 # Версия программы
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 GITHUB_REPO = "Inter1ark/Parser-2gis"
 
 # Проверка платформы
@@ -1184,7 +1184,7 @@ def gui_settings(config: Configuration) -> None:
             messagebox.showwarning("API-ключ", "Введите API-ключ SX.ORG и нажмите OK.")
             return
         
-        logger.info("🚀 Создание мобильной прокси РФ (shared)...")
+        logger.info("🚀 Создание прокси для работы...")
         sx_status_var.set("Прокси: ⏳ создаём...")
         
         def _create():
@@ -1204,9 +1204,8 @@ def gui_settings(config: Configuration) -> None:
                     _update_proxy_display()
                     logger.info("✅ Прокси создана: %s:%s", result['host'], result['port'])
                     messagebox.showinfo("Успех!",
-                        f"✅ Мобильная прокси РФ создана!\n\n"
-                        f"Сервер: {result['host']}:{result['port']}\n"
-                        f"Логин: {result['login']}\n\n"
+                        f"✅ Прокси создана!\n\n"
+                        f"Сервер: {result['host']}:{result['port']}\n\n"
                         f"Прокси сохранена и будет использоваться автоматически.\n"
                         f"Кнопка 'Сменить IP' — для ротации адреса.")
                 else:
