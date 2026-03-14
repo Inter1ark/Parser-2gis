@@ -39,7 +39,7 @@ from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 
 # Версия программы
-VERSION = "1.3.2"
+VERSION = "1.4.0"
 GITHUB_REPO = "Inter1ark/Parser-2gis"
 
 # Проверка платформы
@@ -868,7 +868,7 @@ class WriterOptions(pydantic.BaseModel):
 class ParserOptions(pydantic.BaseModel):
     skip_404_response: bool = True
     delay_between_clicks: int = 0
-    max_records: int = 100000
+    max_records: int = 0
     use_gc: bool = False
     gc_pages_interval: int = 5
 
@@ -1009,14 +1009,14 @@ def gui_settings(config: Configuration) -> None:
                            bg="#43A047", fg="white", activebackground="#66BB6A",
                            activeforeground="white", relief=tk.FLAT, bd=0,
                            font=("TkDefaultFont", 10, "bold"), cursor="hand2", padx=12, pady=6,
-                           command=lambda: webbrowser.open("https://sx.org/?c=ZHdMCL"))
+                           command=lambda: webbrowser.open("https://my.sx.org/auth/login/?utm-source=parser2gis"))
     banner_title_lbl.pack(pady=(20, 2))
     banner_brand.pack(pady=(0, 4))
     banner_sub.pack(pady=(6, 2))
     banner_text.pack(pady=(2, 10), padx=12)
     banner_btn.pack(pady=(0, 16))
 
-    ttk.Button(left, text="Инструкция по настройке ПРОКСИ", command=lambda: webbrowser.open("https://docs.google.com/document/d/1V5TB00h8W3B9arFZUK9uhuYxk_fxjAj5AXK9qgnL7lk/edit?usp=sharing")).pack(anchor="w", padx=4, pady=(0,8))
+
 
     # Parser tab (restore)
     parser_frame = ttk.Frame(notebook)
@@ -1032,8 +1032,8 @@ def gui_settings(config: Configuration) -> None:
                    activeforeground="white").pack(anchor="w", padx=8, pady=4)
     ttk.Label(parser_frame, text="Задержка между кликами (ms)").pack(anchor="w", padx=8, pady=(8,2))
     ttk.Spinbox(parser_frame, from_=0, to=10000, textvariable=delay_clicks_var).pack(anchor="w", padx=8, pady=2)
-    ttk.Label(parser_frame, text="Макс. записей").pack(anchor="w", padx=8, pady=(8,2))
-    ttk.Spinbox(parser_frame, from_=1, to=1000000, textvariable=max_records_var).pack(anchor="w", padx=8, pady=2)
+    ttk.Label(parser_frame, text="Макс. записей (0 = без лимита)").pack(anchor="w", padx=8, pady=(8,2))
+    ttk.Spinbox(parser_frame, from_=0, to=1000000, textvariable=max_records_var).pack(anchor="w", padx=8, pady=2)
     
     tk.Checkbutton(parser_frame, text="Использовать GC", variable=use_gc_var,
                    bg="#1B5E20", fg="white", selectcolor="#2E7D32", activebackground="#1B5E20", 
@@ -1302,29 +1302,58 @@ def gui_urls_editor(urls: List[str]) -> List[str] | None:
 def gui_urls_generator() -> List[str]:
     window = tk.Toplevel()
     window.title("Генератор URL")
-    window.geometry("500x300")
+    window.geometry("550x380")
     
     # Подсказка
-    hint_text = "⚠️ ВАЖНО: Город пишется на АНГЛИЙСКОМ!\nПримеры: moscow, spb, novosibirsk, ekaterinburg"
-    ttk.Label(window, text=hint_text, foreground="yellow", font=("Arial", 10, "bold")).pack(pady=6)
+    hint_text = "ℹ️ Город/страна пишется на АНГЛИЙСКОМ!"
+    ttk.Label(window, text=hint_text, foreground="yellow", font=("Arial", 10, "bold")).pack(pady=(8,4))
     
-    ttk.Label(window, text="Город (АНГЛИЙСКИМ! moscow, spb, ekaterinburg):").pack(pady=6)
-    city_var = tk.StringVar()
-    city_entry = ttk.Entry(window, textvariable=city_var, width=40)
-    city_entry.pack(pady=6)
+    # Тип поиска: город или страна
+    search_type_var = tk.StringVar(value="city")
+    type_frame = ttk.Frame(window)
+    type_frame.pack(pady=(4, 6))
+    ttk.Label(type_frame, text="Тип поиска:").pack(side=tk.LEFT, padx=(0,8))
+    tk.Radiobutton(type_frame, text="По городу", variable=search_type_var, value="city",
+                   bg="#1B5E20", fg="white", selectcolor="#2E7D32",
+                   activebackground="#1B5E20", activeforeground="white").pack(side=tk.LEFT, padx=4)
+    tk.Radiobutton(type_frame, text="По стране", variable=search_type_var, value="country",
+                   bg="#1B5E20", fg="white", selectcolor="#2E7D32",
+                   activebackground="#1B5E20", activeforeground="white").pack(side=tk.LEFT, padx=4)
     
-    ttk.Label(window, text="Рубрика (кафе, рестораны, магазины):").pack(pady=6)
+    # Примеры
+    examples_var = tk.StringVar(value="Примеры: moscow, spb, novosibirsk, ekaterinburg")
+    examples_label = ttk.Label(window, textvariable=examples_var, font=("TkDefaultFont", 8))
+    examples_label.pack(pady=(0, 4))
+    
+    def on_type_change(*_args):
+        if search_type_var.get() == "city":
+            location_label_var.set("Город (на английском):")
+            examples_var.set("Примеры: moscow, spb, novosibirsk, ekaterinburg")
+        else:
+            location_label_var.set("Страна (на английском):")
+            examples_var.set("Примеры: russia, kazakhstan, uzbekistan, kyrgyzstan")
+    search_type_var.trace_add("write", on_type_change)
+    
+    location_label_var = tk.StringVar(value="Город (на английском):")
+    ttk.Label(window, textvariable=location_label_var).pack(pady=(6,2))
+    location_var = tk.StringVar()
+    ttk.Entry(window, textvariable=location_var, width=40).pack(pady=4)
+    
+    ttk.Label(window, text="Рубрика (кафе, рестораны, магазины):").pack(pady=(6,2))
     rubric_var = tk.StringVar()
-    rubric_entry = ttk.Entry(window, textvariable=rubric_var, width=40)
-    rubric_entry.pack(pady=6)
+    ttk.Entry(window, textvariable=rubric_var, width=40).pack(pady=4)
     
     result: List[str] = []
     def on_generate():
         rubric = rubric_var.get().strip()
-        city = city_var.get().strip()
-        if rubric and city:
-            # НЕ кодируем рубрику - 2GIS принимает кириллицу в URL напрямую
-            generated_url = f"https://2gis.ru/{city}/search/{rubric}"
+        location = location_var.get().strip()
+        if rubric and location:
+            if search_type_var.get() == "country":
+                # Формат для страны: https://2gis.ru/search/рубрика/country/страна
+                generated_url = f"https://2gis.ru/search/{rubric}/country/{location}"
+            else:
+                # Формат для города: https://2gis.ru/город/search/рубрика
+                generated_url = f"https://2gis.ru/{location}/search/{rubric}"
             result.append(generated_url)
         window.destroy()
     btn_frame = ttk.Frame(window)
@@ -1659,7 +1688,7 @@ class Parser2GIS:
                 firm_url = link_data['href']
                 
                 # Проверяем лимит
-                if len(items) >= self.config.parser.max_records:
+                if self.config.parser.max_records > 0 and len(items) >= self.config.parser.max_records:
                     logger.info(f"✓ Достигнут лимит записей: {self.config.parser.max_records}")
                     return items
                 
@@ -2042,7 +2071,7 @@ class GUIRunner(threading.Thread):
                             logger.info("  ... и ещё %d", len(items) - 5)
                     
                     # Check max records limit
-                    if len(all_items) >= self.config.parser.max_records:
+                    if self.config.parser.max_records > 0 and len(all_items) >= self.config.parser.max_records:
                         logger.info("")
                         logger.info("⚠️  Достигнут лимит записей: %d", self.config.parser.max_records)
                         all_items = all_items[:self.config.parser.max_records]
