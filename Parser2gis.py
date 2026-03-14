@@ -44,7 +44,7 @@ GITHUB_REPO = "Inter1ark/Parser-2gis"
 
 # Города 2GIS по странам (для генератора URL)
 COUNTRY_CITIES = {
-    "russia": [
+    "Россия": [
         "moscow", "spb", "novosibirsk", "ekaterinburg", "kazan", "nizhny_novgorod",
         "chelyabinsk", "samara", "omsk", "rostov", "ufa", "krasnoyarsk", "perm",
         "voronezh", "volgograd", "krasnodar", "saratov", "tyumen", "tolyatti",
@@ -60,19 +60,19 @@ COUNTRY_CITIES = {
         "petropavlovsk_kamchatsky", "yakutsk", "abakan", "pyatigorsk", "makhachkala",
         "khabarovsk", "orsk", "noyabrsk", "neftekamsk", "severodvinsk", "miass",
     ],
-    "kazakhstan": [
+    "Казахстан": [
         "almaty", "astana", "shymkent", "karaganda", "aktau", "aktobe", "atyrau",
         "oral", "kostanay", "pavlodar", "semey", "taldykorgan", "taraz",
         "petropavlovsk", "kokshetau", "turkestan", "ekibastuz", "temirtau", "rudny",
     ],
-    "kyrgyzstan": ["bishkek", "osh"],
-    "uzbekistan": ["tashkent", "samarkand", "bukhara", "namangan", "fergana", "nukus"],
-    "uae": ["dubai"],
-    "czech": ["prague"],
-    "chile": ["santiago"],
-    "italy": ["milan", "rome", "turin", "florence", "naples"],
-    "cyprus": ["limassol", "paphos", "larnaca", "nicosia"],
-    "egypt": ["cairo", "hurghada", "sharm_el_sheikh"],
+    "Кыргызстан": ["bishkek", "osh"],
+    "Узбекистан": ["tashkent", "samarkand", "bukhara", "namangan", "fergana", "nukus"],
+    "ОАЭ": ["dubai"],
+    "Чехия": ["prague"],
+    "Чили": ["santiago"],
+    "Италия": ["milan", "rome", "turin", "florence", "naples"],
+    "Кипр": ["limassol", "paphos", "larnaca", "nicosia"],
+    "Египет": ["cairo", "hurghada", "sharm_el_sheikh"],
 }
 
 # Проверка платформы
@@ -1335,11 +1335,12 @@ def gui_urls_editor(urls: List[str]) -> List[str] | None:
 def gui_urls_generator() -> List[str]:
     window = tk.Toplevel()
     window.title("Генератор URL")
-    window.geometry("550x420")
+    window.geometry("550x380")
     
     # Подсказка
-    hint_text = "ℹ️ Город/страна пишется на АНГЛИЙСКОМ!"
-    ttk.Label(window, text=hint_text, foreground="yellow", font=("Arial", 10, "bold")).pack(pady=(8,4))
+    hint_text = "ℹ️ Город пишется на АНГЛИЙСКОМ!"
+    hint_label = ttk.Label(window, text=hint_text, foreground="yellow", font=("Arial", 10, "bold"))
+    hint_label.pack(pady=(8,4))
     
     # Тип поиска: город или страна
     search_type_var = tk.StringVar(value="city")
@@ -1353,32 +1354,62 @@ def gui_urls_generator() -> List[str]:
                    bg="#1B5E20", fg="white", selectcolor="#2E7D32",
                    activebackground="#1B5E20", activeforeground="white").pack(side=tk.LEFT, padx=4)
     
-    # Примеры
+    # Примеры (только для города)
     examples_var = tk.StringVar(value="Примеры: moscow, spb, novosibirsk, ekaterinburg")
     examples_label = ttk.Label(window, textvariable=examples_var, font=("TkDefaultFont", 8))
     examples_label.pack(pady=(0, 4))
     
-    # Инфо о количестве городов (только для страны)
+    # Фрейм для поля ввода / выбора
+    location_label_var = tk.StringVar(value="Город (на английском):")
+    ttk.Label(window, textvariable=location_label_var).pack(pady=(6,2))
+    
+    location_frame = ttk.Frame(window)
+    location_frame.pack(pady=4)
+    
+    # Поле для города (Entry)
+    city_var = tk.StringVar()
+    city_entry = ttk.Entry(location_frame, textvariable=city_var, width=40)
+    city_entry.pack()
+    
+    # Выпадающий список для страны (Combobox) — скрыт по умолчанию
+    country_names = sorted(COUNTRY_CITIES.keys())
+    country_var = tk.StringVar()
+    country_combo = ttk.Combobox(location_frame, textvariable=country_var, values=country_names,
+                                  state="readonly", width=37)
+    if country_names:
+        country_combo.current(0)
+    
+    # Инфо о количестве городов
     country_info_var = tk.StringVar(value="")
     country_info_label = ttk.Label(window, textvariable=country_info_var, font=("TkDefaultFont", 8), foreground="#90CAF9")
     country_info_label.pack(pady=(0, 2))
     
+    def update_country_info(*_args):
+        name = country_var.get()
+        cities = COUNTRY_CITIES.get(name, [])
+        if cities:
+            country_info_var.set(f"Городов: {len(cities)} — будет создан URL для каждого")
+        else:
+            country_info_var.set("")
+    country_var.trace_add("write", update_country_info)
+    
     def on_type_change(*_args):
         if search_type_var.get() == "city":
             location_label_var.set("Город (на английском):")
+            hint_label.config(text="ℹ️ Город пишется на АНГЛИЙСКОМ!")
             examples_var.set("Примеры: moscow, spb, novosibirsk, ekaterinburg")
+            examples_label.pack(pady=(0, 4))
+            country_combo.pack_forget()
+            city_entry.pack()
             country_info_var.set("")
         else:
-            location_label_var.set("Страна (на английском):")
-            countries = ", ".join(sorted(COUNTRY_CITIES.keys()))
-            examples_var.set(f"Доступные: {countries}")
-            country_info_var.set("Будет создан URL для каждого города страны")
+            location_label_var.set("Страна:")
+            hint_label.config(text="ℹ️ Выберите страну из списка")
+            examples_label.pack_forget()
+            city_entry.pack_forget()
+            country_combo.pack()
+            update_country_info()
     search_type_var.trace_add("write", on_type_change)
-    
-    location_label_var = tk.StringVar(value="Город (на английском):")
-    ttk.Label(window, textvariable=location_label_var).pack(pady=(6,2))
-    location_var = tk.StringVar()
-    ttk.Entry(window, textvariable=location_var, width=40).pack(pady=4)
     
     ttk.Label(window, text="Рубрика (кафе, рестораны, магазины):").pack(pady=(6,2))
     rubric_var = tk.StringVar()
@@ -1387,23 +1418,22 @@ def gui_urls_generator() -> List[str]:
     result: List[str] = []
     def on_generate():
         rubric = rubric_var.get().strip()
-        location = location_var.get().strip().lower()
-        if rubric and location:
-            if search_type_var.get() == "country":
-                cities = COUNTRY_CITIES.get(location)
-                if cities:
-                    for city in cities:
-                        result.append(f"https://2gis.ru/{city}/search/{rubric}")
-                else:
-                    messagebox.showwarning(
-                        "Страна не найдена",
-                        f"Страна '{location}' не найдена.\n\n"
-                        f"Доступные: {', '.join(sorted(COUNTRY_CITIES.keys()))}",
-                        parent=window
-                    )
-                    return
+        if not rubric:
+            return
+        if search_type_var.get() == "country":
+            country_name = country_var.get()
+            cities = COUNTRY_CITIES.get(country_name, [])
+            if cities:
+                for city in cities:
+                    result.append(f"https://2gis.ru/{city}/search/{rubric}")
             else:
+                return
+        else:
+            location = city_var.get().strip().lower()
+            if location:
                 result.append(f"https://2gis.ru/{location}/search/{rubric}")
+            else:
+                return
         window.destroy()
     btn_frame = ttk.Frame(window)
     btn_frame.pack(pady=8)
