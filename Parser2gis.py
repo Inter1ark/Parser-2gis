@@ -39,8 +39,41 @@ from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 
 # Версия программы
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 GITHUB_REPO = "Inter1ark/Parser-2gis"
+
+# Города 2GIS по странам (для генератора URL)
+COUNTRY_CITIES = {
+    "russia": [
+        "moscow", "spb", "novosibirsk", "ekaterinburg", "kazan", "nizhny_novgorod",
+        "chelyabinsk", "samara", "omsk", "rostov", "ufa", "krasnoyarsk", "perm",
+        "voronezh", "volgograd", "krasnodar", "saratov", "tyumen", "tolyatti",
+        "izhevsk", "barnaul", "ulyanovsk", "irkutsk", "vladivostok", "yaroslavl",
+        "kemerovo", "tomsk", "orenburg", "novokuznetsk", "ryazan", "naberezhnye_chelny",
+        "penza", "lipetsk", "kirov", "cheboksary", "tula", "kaliningrad", "kursk",
+        "stavropol", "sochi", "tver", "magnitogorsk", "bryansk", "ivanovo", "belgorod",
+        "surgut", "vladimir", "arkhangelsk", "kaluga", "smolensk", "kurgan",
+        "chita", "orel", "murmansk", "vologda", "saransk", "tambov", "petrozavodsk",
+        "kostroma", "novorossiysk", "yoshkar_ola", "taganrog", "komsomolsk",
+        "syktyvkar", "nizhnevartovsk", "noyabrsk", "nefteyugansk", "blagoveshchensk",
+        "stary_oskol", "novocherkassk", "kamensk_uralsky", "zlatoust", "yuzhno_sakhalinsk",
+        "petropavlovsk_kamchatsky", "yakutsk", "abakan", "pyatigorsk", "makhachkala",
+        "khabarovsk", "orsk", "noyabrsk", "neftekamsk", "severodvinsk", "miass",
+    ],
+    "kazakhstan": [
+        "almaty", "astana", "shymkent", "karaganda", "aktau", "aktobe", "atyrau",
+        "oral", "kostanay", "pavlodar", "semey", "taldykorgan", "taraz",
+        "petropavlovsk", "kokshetau", "turkestan", "ekibastuz", "temirtau", "rudny",
+    ],
+    "kyrgyzstan": ["bishkek", "osh"],
+    "uzbekistan": ["tashkent", "samarkand", "bukhara", "namangan", "fergana", "nukus"],
+    "uae": ["dubai"],
+    "czech": ["prague"],
+    "chile": ["santiago"],
+    "italy": ["milan", "rome", "turin", "florence", "naples"],
+    "cyprus": ["limassol", "paphos", "larnaca", "nicosia"],
+    "egypt": ["cairo", "hurghada", "sharm_el_sheikh"],
+}
 
 # Проверка платформы
 running_linux = lambda: sys.platform.startswith('linux')
@@ -1302,7 +1335,7 @@ def gui_urls_editor(urls: List[str]) -> List[str] | None:
 def gui_urls_generator() -> List[str]:
     window = tk.Toplevel()
     window.title("Генератор URL")
-    window.geometry("550x380")
+    window.geometry("550x420")
     
     # Подсказка
     hint_text = "ℹ️ Город/страна пишется на АНГЛИЙСКОМ!"
@@ -1325,13 +1358,21 @@ def gui_urls_generator() -> List[str]:
     examples_label = ttk.Label(window, textvariable=examples_var, font=("TkDefaultFont", 8))
     examples_label.pack(pady=(0, 4))
     
+    # Инфо о количестве городов (только для страны)
+    country_info_var = tk.StringVar(value="")
+    country_info_label = ttk.Label(window, textvariable=country_info_var, font=("TkDefaultFont", 8), foreground="#90CAF9")
+    country_info_label.pack(pady=(0, 2))
+    
     def on_type_change(*_args):
         if search_type_var.get() == "city":
             location_label_var.set("Город (на английском):")
             examples_var.set("Примеры: moscow, spb, novosibirsk, ekaterinburg")
+            country_info_var.set("")
         else:
             location_label_var.set("Страна (на английском):")
-            examples_var.set("Примеры: russia, kazakhstan, uzbekistan, kyrgyzstan")
+            countries = ", ".join(sorted(COUNTRY_CITIES.keys()))
+            examples_var.set(f"Доступные: {countries}")
+            country_info_var.set("Будет создан URL для каждого города страны")
     search_type_var.trace_add("write", on_type_change)
     
     location_label_var = tk.StringVar(value="Город (на английском):")
@@ -1346,15 +1387,23 @@ def gui_urls_generator() -> List[str]:
     result: List[str] = []
     def on_generate():
         rubric = rubric_var.get().strip()
-        location = location_var.get().strip()
+        location = location_var.get().strip().lower()
         if rubric and location:
             if search_type_var.get() == "country":
-                # Формат для страны: https://2gis.ru/search/рубрика/country/страна
-                generated_url = f"https://2gis.ru/search/{rubric}/country/{location}"
+                cities = COUNTRY_CITIES.get(location)
+                if cities:
+                    for city in cities:
+                        result.append(f"https://2gis.ru/{city}/search/{rubric}")
+                else:
+                    messagebox.showwarning(
+                        "Страна не найдена",
+                        f"Страна '{location}' не найдена.\n\n"
+                        f"Доступные: {', '.join(sorted(COUNTRY_CITIES.keys()))}",
+                        parent=window
+                    )
+                    return
             else:
-                # Формат для города: https://2gis.ru/город/search/рубрика
-                generated_url = f"https://2gis.ru/{location}/search/{rubric}"
-            result.append(generated_url)
+                result.append(f"https://2gis.ru/{location}/search/{rubric}")
         window.destroy()
     btn_frame = ttk.Frame(window)
     btn_frame.pack(pady=8)
@@ -1656,6 +1705,12 @@ class Parser2GIS:
                 
                 logger.info(f"📄 В HTML найдено: {len(unique_firms)} уникальных firm ID")
                 
+                # Определяем город из URL (2gis.ru/city/search/...)
+                city_slug = 'moscow'
+                url_match = re.match(r'https?://2gis\.ru/([^/]+)/search/', url)
+                if url_match:
+                    city_slug = url_match.group(1)
+                
                 # Формируем ссылки (максимум 50 за раз)
                 links = []
                 base_url = 'https://2gis.ru'
@@ -1663,7 +1718,7 @@ class Parser2GIS:
                 for firm_id in unique_firms[:50]:
                     if firm_id not in collected_ids:  # Пропускаем уже собранные
                         links.append({
-                            'href': f"{base_url}/moscow/firm/{firm_id}",
+                            'href': f"{base_url}/{city_slug}/firm/{firm_id}",
                             'id': firm_id
                         })
                 
